@@ -1,0 +1,22 @@
+{
+  "_comment": "Copy to downloader_config.json and edit for this PC.",
+
+  "account_email": "your.name@gmail.com",
+
+  "chrome": {
+    "user_data_path": "",
+    "profile_name": "Default"
+  },
+
+  "download_dir": "C:\\Users\\YOUR_USER\\AppData\\Local\\download",
+
+  "extension_id": "",
+  "auto_install_extension": true,
+  "launch_mode": "attach",
+  "background_launch": false,
+  "invisible_launch": false,
+  "automation_window_width": 900,
+  "automation_window_height": 700,
+  "state_file": "downloaded_attachments.json",
+  "browser": "chrome"
+}

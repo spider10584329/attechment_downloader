@@ -1,0 +1,15 @@
+{
+  "account_email": "spider10584329@gmail.com",
+  "configured_download_dir": "C:\\Users\\Administrator\\AppData\\Local\\download",
+  "download_dir": "C:\\Users\\Administrator\\AppData\\Local\\download",
+  "download_relative_dir": "",
+  "use_native_download": true,
+  "native_host_name": "com.gmail_downloader.native_host",
+  "needs_relocate": false,
+  "staging_dir": "",
+  "launcher_port": 8765,
+  "processed_email_ids": [],
+  "status_file_name": ".gmail_dl_status.json",
+  "automation_window_width": 900,
+  "automation_window_height": 700
+}

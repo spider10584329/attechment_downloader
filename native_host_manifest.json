@@ -1,0 +1,9 @@
+{
+  "name": "com.gmail_downloader.native_host",
+  "description": "Gmail downloader \u2014 save attachments directly to configured folder",
+  "path": "D:\\My_Projects\\z_testing\\blockchain\\downloader\\native_download_host.bat",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://jfboaakhgahngpeanaienokpmeflgpfh/"
+  ]
+}
