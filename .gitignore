@@ -1,0 +1,5 @@
+__pycache__/
+*.py[cod]
+.automation_chrome_user_data/
+native_host_manifest.json
+extension/config.runtime.json

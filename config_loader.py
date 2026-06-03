@@ -78,15 +78,6 @@ def normalize_config(raw: dict) -> dict:
     cfg["source_profile_name"] = profile_name
     cfg["download_dir"] = download_dir
 
-    state_file = _first_non_empty(cfg.get("state_file"))
-    if state_file:
-        state_path = Path(state_file).expanduser()
-        if not state_path.is_absolute():
-            state_path = PROJECT_DIR / state_path
-        cfg["state_file"] = str(state_path.resolve())
-    else:
-        cfg["state_file"] = str((PROJECT_DIR / "downloaded_attachments.json").resolve())
-
     # Canonical nested block for documentation / editing.
     cfg["chrome"] = {
         "user_data_path": user_data,

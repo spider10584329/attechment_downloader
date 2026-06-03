@@ -57,7 +57,7 @@ def close_chrome(force: bool = True, wait_sec: float = 3.0) -> None:
         return
     if not force:
         raise RuntimeError(
-            "Chrome is still running. Close all Chrome windows, then run install_extension.bat again."
+            "Chrome is still running. Close all Chrome windows, then run run_downloader.bat again."
         )
     print("Closing Chrome (required to register the extension in the profile)...")
     subprocess.run(

@@ -336,15 +336,8 @@ async function runDownloader(config, processedList, options = {}) {
   const timestamp = formatTimestamp(new Date());
   const filenamePrefix = `${timestamp}__${sanitizePart(subject).slice(0, 70)}`;
 
-  const useNativeDownload = Boolean(config?.use_native_download);
-  const runStart = await sendRunStart(
-    resolveRunDownloadRelativeDir(config),
-    filenamePrefix,
-    {
-      useNativeDownload,
-      targetDir: String(config?.configured_download_dir || ""),
-    }
-  );
+  const targetDir = String(config?.configured_download_dir || "");
+  const runStart = await sendRunStart(filenamePrefix, targetDir);
   if (!runStart?.ok) {
     return {
       ok: false,
@@ -357,7 +350,6 @@ async function runDownloader(config, processedList, options = {}) {
       debug: describePageState(targetMessage || document),
     };
   }
-  await sendRunContext(config, filenamePrefix, useNativeDownload);
 
   let targets = [];
   for (let attempt = 0; attempt < 8; attempt += 1) {
@@ -1414,7 +1406,7 @@ async function fetchAttachmentBytes(url) {
   };
 }
 
-function sendRunStart(downloadRelativeDir, filenamePrefix, options = {}) {
+function sendRunStart(filenamePrefix, targetDir) {
   return new Promise((resolve) => {
     let settled = false;
     const timeout = setTimeout(() => {
@@ -1428,10 +1420,8 @@ function sendRunStart(downloadRelativeDir, filenamePrefix, options = {}) {
     chrome.runtime.sendMessage(
       {
         type: "RUN_START",
-        downloadRelativeDir,
         filenamePrefix,
-        useNativeDownload: Boolean(options.useNativeDownload),
-        targetDir: String(options.targetDir || ""),
+        targetDir: String(targetDir || ""),
       },
       (response) => {
         if (settled) {
@@ -1445,23 +1435,6 @@ function sendRunStart(downloadRelativeDir, filenamePrefix, options = {}) {
         }
         resolve(response || { ok: true });
       }
-    );
-  });
-}
-
-function sendRunContext(config, filenamePrefix, useNativeDownload) {
-  return new Promise((resolve) => {
-    chrome.runtime.sendMessage(
-      {
-        type: "RUN_CONTEXT",
-        needsRelocate: useNativeDownload ? false : Boolean(config?.needs_relocate),
-        useNativeDownload: Boolean(useNativeDownload),
-        stagingDir: String(config?.staging_dir || ""),
-        targetDir: String(config?.configured_download_dir || ""),
-        launcherPort: Number(config?.launcher_port || 8765),
-        filenamePrefix: String(filenamePrefix || ""),
-      },
-      () => resolve()
     );
   });
 }

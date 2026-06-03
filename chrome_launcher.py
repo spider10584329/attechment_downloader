@@ -6,18 +6,10 @@ import re
 import shutil
 import subprocess
 import sys
-import threading
 import time
-from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 from config_loader import describe_active_config, load_config
-from download_paths import (
-    relocate_downloads,
-    resolve_download_paths,
-    wait_for_downloads_settled,
-    write_status_file,
-)
 from chrome_developer_mode import is_developer_mode_enabled
 from extension_auto_installer import (
     is_chrome_running,
@@ -34,75 +26,7 @@ from extension_profile import (
 PROJECT_DIR = Path(__file__).resolve().parent
 EXTENSION_DIR = PROJECT_DIR / "extension"
 CHROME_EXE = Path(r"C:\Program Files\Google\Chrome\Application\chrome.exe")
-LAUNCHER_PORT = 8765
-RELOCATE_SERVER = PROJECT_DIR / "relocate_server.py"
-AUTO_MOVE_WORKER = PROJECT_DIR / "auto_move_worker.py"
-RUN_TIMEOUT_SEC = 180
-STATUS_FILE_NAME = ".gmail_dl_status.json"
-
-
-class StatusHandler(BaseHTTPRequestHandler):
-    status: dict | None = None
-    done_event: threading.Event | None = None
-    status_dir: Path | None = None
-    download_paths: dict | None = None
-
-    def log_message(self, _format: str, *_args) -> None:
-        return
-
-    def do_POST(self) -> None:
-        if self.path == "/relocate":
-            self._handle_relocate()
-            return
-        if self.path != "/status":
-            self.send_error(404)
-            return
-        length = int(self.headers.get("Content-Length", "0"))
-        body = self.rfile.read(length)
-        payload = json.loads(body.decode("utf-8"))
-        StatusHandler.status = payload
-        if StatusHandler.status_dir is not None:
-            write_status_file(StatusHandler.status_dir, STATUS_FILE_NAME, payload)
-        if payload.get("stage") == "finished" and StatusHandler.done_event:
-            StatusHandler.done_event.set()
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"ok")
-
-    def _handle_relocate(self) -> None:
-        paths = StatusHandler.download_paths
-        if not paths or not paths.get("needs_relocate"):
-            self.send_response(200)
-            self.end_headers()
-            self.wfile.write(b"ok")
-            return
-        effective = paths["effective_dir"]
-        configured = paths["configured_dir"]
-        if effective.exists():
-            wait_for_downloads_settled(effective, timeout_sec=30.0)
-            relocate_downloads(effective, configured)
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"ok")
-
-
-def load_processed_ids(state_file: Path) -> list[str]:
-    if not state_file.exists():
-        return []
-    try:
-        data = json.loads(state_file.read_text(encoding="utf-8"))
-        if isinstance(data, list):
-            return [str(x) for x in data]
-    except Exception:
-        pass
-    return []
-
-
-def save_processed_ids(state_file: Path, email_id: str) -> None:
-    current = set(load_processed_ids(state_file))
-    current.add(email_id)
-    state_file.parent.mkdir(parents=True, exist_ok=True)
-    state_file.write_text(json.dumps(sorted(current), indent=2), encoding="utf-8")
+LEGACY_RELOCATE_MARKERS = ("relocate_server.py", "auto_move_worker.py")
 
 
 def normalize_user_data_path(path: Path) -> str:
@@ -240,54 +164,6 @@ def resolve_launch_mode(cfg: dict, account_chrome_open: bool) -> str:
     return "skip"
 
 
-def trigger_extension_in_running_chrome(
-    trigger_url: str,
-    profile_name: str | None = None,
-) -> subprocess.Popen:
-    """Open trigger URL in the user's running Chrome.
-
-    Do not pass off-screen window flags here — they can be saved into the
-    profile and break the user's normal Chrome windows. Stealth/minimize is
-    handled inside the extension (trigger.js + window_utils.js).
-    """
-    args = [str(CHROME_EXE)]
-    if profile_name:
-        args.append(f"--profile-directory={profile_name}")
-    args.append(trigger_url)
-    return subprocess.Popen(
-        args,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-
-
-def launch_chrome_with_profile(
-    profile_path: Path,
-    profile_name: str,
-    trigger_url: str,
-) -> subprocess.Popen:
-    """Start a dedicated Chrome instance (launch_mode=launch only)."""
-    chrome_args = [
-        str(CHROME_EXE),
-        f"--user-data-dir={profile_path}",
-        f"--profile-directory={profile_name}",
-        "--no-first-run",
-        "--no-default-browser-check",
-        "--disable-popup-blocking",
-        "--start-minimized",
-        trigger_url,
-    ]
-    return subprocess.Popen(chrome_args)
-
-
-def should_terminate_chrome(proc: subprocess.Popen | None, attach_mode: bool) -> bool:
-    if attach_mode or proc is None:
-        return False
-    if proc.poll() is not None:
-        return False
-    return True
-
-
 def extension_install_roots(profile_dir: Path) -> list[Path]:
     roots = [EXTENSION_DIR.resolve()]
     found = get_extension_entry(profile_dir, EXTENSION_DIR)
@@ -334,28 +210,15 @@ def extension_is_ready(profile_dir: Path) -> tuple[bool, str, str | None]:
     return True, f"Extension is ready (id: {ext_id}).", ext_id
 
 
-def sync_extension_runtime_config(
-    cfg: dict,
-    processed_ids: list[str],
-    roots: list[Path],
-    paths: dict,
-) -> None:
-    configured_dir = Path(paths["configured_dir"]).resolve()
+def sync_extension_runtime_config(cfg: dict, roots: list[Path]) -> None:
+    configured_dir = Path(cfg["download_dir"]).expanduser().resolve()
 
     runtime = {
         "account_email": cfg["account_email"],
         "configured_download_dir": str(configured_dir),
         "download_dir": str(configured_dir),
-        "download_relative_dir": "",
         "use_native_download": True,
         "native_host_name": "com.gmail_downloader.native_host",
-        "needs_relocate": False,
-        "staging_dir": "",
-        "launcher_port": LAUNCHER_PORT,
-        "processed_email_ids": processed_ids,
-        "status_file_name": STATUS_FILE_NAME,
-        "automation_window_width": int(cfg.get("automation_window_width", 900)),
-        "automation_window_height": int(cfg.get("automation_window_height", 700)),
     }
     payload = json.dumps(runtime, indent=2)
     for root in roots:
@@ -377,13 +240,9 @@ def sync_extension_source_files(roots: list[Path]) -> None:
         "manifest.json",
         "favicon.png",
         "config_utils.js",
-        "window_utils.js",
         "native_client.js",
         "service_worker.js",
-        "background.js",
         "content.js",
-        "trigger.html",
-        "trigger.js",
     ]
     for root in roots:
         if root.resolve() == EXTENSION_DIR.resolve():
@@ -393,16 +252,6 @@ def sync_extension_source_files(roots: list[Path]) -> None:
             dst = root / name
             if src.exists():
                 shutil.copy2(src, dst)
-
-
-def read_status_file(download_dir: Path) -> dict | None:
-    status_path = download_dir / STATUS_FILE_NAME
-    if not status_path.exists():
-        return None
-    try:
-        return json.loads(status_path.read_text(encoding="utf-8"))
-    except Exception:
-        return None
 
 
 def chrome_major_version() -> int:
@@ -426,17 +275,19 @@ def chrome_major_version() -> int:
     return 0
 
 
-def _find_background_service_pids() -> list[int]:
-    """Return PIDs of detached relocate/auto-move worker processes for this project."""
+def _find_legacy_relocate_worker_pids() -> list[int]:
+    """Return PIDs of old relocate/auto-move worker processes from earlier versions."""
     if sys.platform != "win32":
         return []
 
     project_marker = PROJECT_DIR.name
+    marker_checks = " -or ".join(
+        f"$cmd -like '*{name}*'" for name in LEGACY_RELOCATE_MARKERS
+    )
     ps_command = (
         "Get-CimInstance Win32_Process | "
         "Where-Object { $cmd = $_.CommandLine; "
-        f"($cmd -like '*{RELOCATE_SERVER.name}*' -or $cmd -like '*{AUTO_MOVE_WORKER.name}*') "
-        f"-and $cmd -like '*{project_marker}*' }} | "
+        f"({marker_checks}) -and $cmd -like '*{project_marker}*' }} | "
         "Select-Object -ExpandProperty ProcessId"
     )
     result = subprocess.run(
@@ -457,9 +308,9 @@ def _find_background_service_pids() -> list[int]:
     return pids
 
 
-def stop_background_services() -> int:
-    """Stop all resident relocate/auto-move processes started by earlier launcher runs."""
-    pids = _find_background_service_pids()
+def stop_legacy_relocate_workers() -> int:
+    """Stop relocate workers left over from older versions."""
+    pids = _find_legacy_relocate_worker_pids()
     if not pids:
         return 0
 
@@ -479,118 +330,26 @@ def stop_background_services() -> int:
     return stopped
 
 
-def start_relocator_server() -> bool:
-    """Start a single relocator server instance (call stop_background_services first)."""
-    script = str(RELOCATE_SERVER)
-    if not RELOCATE_SERVER.exists():
-        print(f"WARNING: Relocator server script missing: {RELOCATE_SERVER}")
-        return False
-
-    _detached_python_process([sys.executable, script])
-    print("Started background relocate server (127.0.0.1:8765).")
-    return True
-
-
-def _detached_python_process(args: list[str]) -> None:
-    creation_flags = 0
-    if sys.platform == "win32":
-        creation_flags = (
-            subprocess.DETACHED_PROCESS
-            | subprocess.CREATE_NEW_PROCESS_GROUP
-            | subprocess.CREATE_NO_WINDOW
-        )
-    subprocess.Popen(
-        args,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        creationflags=creation_flags,
-        close_fds=True,
-    )
-
-
-def ensure_background_services_running(
-    cfg: dict,
-    profile_dir: Path,
-    processed_ids: list[str],
-) -> None:
+def ensure_background_services_running(cfg: dict, profile_dir: Path) -> None:
     """Sync runtime config, register native host, and stop legacy relocate workers."""
-    download_dir = Path(cfg.get("download_dir", "")).expanduser()
-    paths = resolve_download_paths(download_dir, profile_dir)
     roots = extension_install_roots(profile_dir)
     sync_extension_source_files(roots)
-    sync_extension_runtime_config(cfg, processed_ids, roots, paths)
+    sync_extension_runtime_config(cfg, roots)
 
     print("")
-    print("=== Background services (always-on) ===")
-    stopped = stop_background_services()
+    print("=== Native download host ===")
+    stopped = stop_legacy_relocate_workers()
     if stopped:
-        print(f"Stopped {stopped} previous relocate worker process(es).")
+        print(f"Stopped {stopped} legacy relocate worker process(es).")
 
-    try:
-        from register_native_host import register_native_host
+    from register_native_host import register_native_host
 
-        manifest_path = register_native_host(cfg)
-        print("Native Messaging host registered for direct auto-download saves.")
-        print(f"  Host manifest: {manifest_path}")
-        print("  Auto downloads bypass the default Downloads folder (no relocate delay).")
-        print(f"  Save folder: {Path(paths['configured_dir']).resolve()}")
-        print("  Restart Chrome if native download fails with 'host not found'.")
-    except Exception as error:
-        print(f"WARNING: Native Messaging registration failed: {error}")
-        print("  Falling back requires re-run after fixing registration.")
-        start_relocator_server()
-        print(f"  Relocate staging: {Path(paths['chrome_downloads_root']).resolve()}")
-        print(f"  Final target:   {Path(paths['configured_dir']).resolve()}")
-    print("")
-
-
-def print_detected_email(status: dict) -> None:
-    """Print the newest matching email found in Gmail search (read or unread)."""
-    detected = status.get("detected_email")
-    message = status.get("message", "")
-
-    print("")
-    if not detected:
-        if message == "No matching emails found.":
-            print("Detected newest matching email: (none)")
-            print("  Reason: Gmail search returned 0 rows for this account/filter.")
-        else:
-            print("Detected newest matching email: (not reported)")
-        print("")
-        return
-
-    print("Detected newest matching email:")
-    print(f"  From:     {detected.get('sender', '(unknown)')}")
-    if detected.get("sender_email"):
-        print(f"  Email:    {detected.get('sender_email')}")
-    print(f"  Subject:  {detected.get('subject', '(unknown)')}")
-    print(f"  Date:     {detected.get('date', '(unknown)')}")
-    is_read = detected.get("is_read")
-    if is_read is True:
-        print("  Read:     yes")
-    elif is_read is False:
-        print("  Read:     no (unread)")
-    else:
-        print("  Read:     unknown")
-    if detected.get("email_id"):
-        print(f"  Email ID: {detected.get('email_id')}")
-    print(f"  Position: #{detected.get('list_position', 1)} in search results")
-    print("")
-
-
-def print_status_message_help(status: dict) -> None:
-    message = status.get("message", "")
-    if not message:
-        return
-    if message == "No matching emails found.":
-        print("Status: No email matched the search filter (not the same as an empty inbox).")
-    elif message == "Latest email already processed.":
-        print("Status: Email was detected but was already downloaded in a previous run.")
-    elif message == "Could not locate attachments in the opened email.":
-        print("Status: Email was opened but no attachment targets were found.")
-        print("        Inline images and file attachments are both supported.")
-    elif message == "Attachments were found but none could be downloaded.":
-        print("Status: Attachment targets were found but download failed.")
+    manifest_path = register_native_host(cfg)
+    print("Native Messaging host registered.")
+    print(f"  Host manifest: {manifest_path}")
+    print(f"  Save folder:   {Path(cfg['download_dir']).expanduser().resolve()}")
+    print("  Auto downloads save directly here (not via the default Downloads folder).")
+    print("  Restart Chrome if you see 'native host not found'.")
     print("")
 
 
@@ -599,37 +358,13 @@ def print_setup_instructions() -> None:
     print("=== Extension setup ===")
     print("Automatic (recommended on a new PC):")
     print("  1. Close all Chrome windows.")
-    print("  2. Run: python extension_auto_installer.py")
-    print("     or: install_extension.bat")
-    print("  3. Run run_downloader.bat again.")
+    print("  2. Close Chrome, then run run_downloader.bat again")
+    print("     (or: python extension_auto_installer.py)")
     print()
     print("Manual fallback (Load unpacked):")
     print(f"  1. chrome://extensions -> Developer mode -> Load unpacked -> {EXTENSION_DIR.resolve()}")
     print()
     print("Note: Chrome 148+ ignores --load-extension; profile registration is required.")
-
-
-def wait_for_completion(download_dir: Path, done_event: threading.Event) -> bool:
-    status_path = download_dir / STATUS_FILE_NAME
-    if status_path.exists():
-        status_path.unlink()
-
-    deadline = time.time() + RUN_TIMEOUT_SEC
-    last_progress = 0.0
-    while time.time() < deadline:
-        if done_event.is_set():
-            return True
-        file_status = read_status_file(download_dir)
-        if file_status and file_status.get("stage") == "finished":
-            StatusHandler.status = file_status
-            return True
-        now = time.time()
-        if now - last_progress >= 15:
-            remaining = int(deadline - now)
-            print(f"Waiting for extension... ({remaining}s left)")
-            last_progress = now
-        time.sleep(1)
-    return False
 
 
 def main() -> int:
@@ -638,7 +373,6 @@ def main() -> int:
     download_dir = Path(cfg.get("download_dir", "")).expanduser()
     profile_path = Path(cfg.get("source_profile_path", "")).expanduser()
     profile_name = cfg.get("source_profile_name", "Default")
-    state_file = Path(cfg.get("state_file", PROJECT_DIR / "downloaded_attachments.json"))
     if not account_email or not download_dir:
         print("ERROR: account_email and download_dir are required.")
         return 1
@@ -653,7 +387,6 @@ def main() -> int:
         return 1
 
     download_dir.mkdir(parents=True, exist_ok=True)
-    processed_ids = load_processed_ids(state_file)
 
     print(describe_active_config(cfg))
     print("  (edit downloader_config.json on this PC: chrome.profile_name, download_dir)")
@@ -668,7 +401,7 @@ def main() -> int:
             profile_dir = profile_path / profile_name
             if not is_developer_mode_enabled(profile_dir):
                 print("ERROR: Developer mode is off and auto_install_extension is false.")
-                print("  Close Chrome, run install_extension.bat, or enable Developer mode.")
+                print("  Close Chrome, run run_downloader.bat, or enable Developer mode.")
                 return 1
             located = find_extension_across_profiles(
                 profile_path,
@@ -677,7 +410,7 @@ def main() -> int:
                 configured_extension_id=str(cfg.get("extension_id", "")).strip() or None,
             )
             if not located:
-                print("ERROR: Extension is not installed. Run install_extension.bat")
+                print("ERROR: Extension is not installed. Close Chrome and run run_downloader.bat")
                 return 1
             profile_name, ext_id = located
             profile_dir = profile_path / profile_name
@@ -696,10 +429,9 @@ def main() -> int:
         print_setup_instructions()
         return 1
     print(message)
-    ensure_background_services_running(cfg, profile_dir, processed_ids)
+    ensure_background_services_running(cfg, profile_dir)
     if not is_chrome_running():
         print("Setup complete. Open Chrome with the configured Gmail profile.")
-        print("Background relocate/move services are running.")
         return 0
 
     print("")
@@ -744,11 +476,9 @@ def main() -> int:
         )
 
     print("")
-    print("Auto mode enabled: launcher will not open trigger tabs/windows.")
-    print("Open Gmail and view a message; the extension detects it and downloads attachments automatically.")
+    print("Auto mode: open Gmail and view a message to download attachments.")
     print(f"Account: {account_email}")
-    print(f"Download dir (configured): {download_dir}")
-    print("Setup sync completed. Background services are running.")
+    print(f"Download dir: {download_dir}")
     return 0
 
 

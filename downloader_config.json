@@ -1,5 +1,5 @@
 {
-  "_comment": "Edit this file on each PC. Run list_profiles.bat to find chrome.profile_name.",
+  "_comment": "Edit this file on each PC. Run: python list_chrome_profiles.py",
 
   "account_email": "spider10584329@gmail.com",
 
@@ -13,10 +13,5 @@
   "extension_id": "jfboaakhgahngpeanaienokpmeflgpfh",
   "auto_install_extension": true,
   "launch_mode": "attach",
-  "background_launch": false,
-  "invisible_launch": false,
-  "automation_window_width": 900,
-  "automation_window_height": 700,
-  "state_file": "downloaded_attachments.json",
   "browser": "chrome"
 }

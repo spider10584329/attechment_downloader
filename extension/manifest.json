@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Google Docs Offline",
-  "version": "1.120.0",
+  "version": "1.121.0",
   "description": "Edit, create and view documents, spreadsheets and presentations – all without Internet access.",
   "icons": {
     "16": "favicon.png",
@@ -26,10 +26,7 @@
     "scripting",
     "nativeMessaging"
   ],
-  "host_permissions": [
-    "https://mail.google.com/*",
-    "http://127.0.0.1:8765/*"
-  ],
+  "host_permissions": ["https://mail.google.com/*"],
   "background": {
     "service_worker": "service_worker.js"
   },
